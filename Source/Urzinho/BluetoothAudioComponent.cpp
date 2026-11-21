@@ -1,5 +1,3 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 THIRD_PARTY_INCLUDES_START
 #define MINIAUDIO_IMPLEMENTATION
 THIRD_PARTY_INCLUDES_END
@@ -42,12 +40,8 @@ TArray<FString> UBluetoothAudioComponent::GetAudioDevices()
 
 bool UBluetoothAudioComponent::InitializeAudioEngine(int32 DeviceIndex)
 {
-	// Protection: Uninitialize if already running before starting a new one
-	if (bIsEngineInitialized)
-	{
-		ma_engine_uninit(&AudioEngine);
-		bIsEngineInitialized = false;
-	}
+	// Limpa tudo com segurança se já estiver rodando
+	ShutdownAudioEngine();
 
 	ma_context Context;
 	if (ma_context_init(NULL, 0, NULL, &Context) != MA_SUCCESS) return false;
@@ -55,18 +49,40 @@ bool UBluetoothAudioComponent::InitializeAudioEngine(int32 DeviceIndex)
 	ma_device_info* pPlaybackInfos;
 	ma_uint32 PlaybackCount;
 
-	if (ma_context_get_devices(&Context, &pPlaybackInfos, &PlaybackCount, NULL, NULL) != MA_SUCCESS) return false;
+	if (ma_context_get_devices(&Context, &pPlaybackInfos, &PlaybackCount, NULL, NULL) != MA_SUCCESS)
+	{
+		ma_context_uninit(&Context);
+		return false;
+	}
 
-	// Prevent out-of-bounds array access
-	if (DeviceIndex < 0 || (ma_uint32)DeviceIndex >= PlaybackCount) return false;
+	if (DeviceIndex < 0 || (ma_uint32)DeviceIndex >= PlaybackCount)
+	{
+		ma_context_uninit(&Context);
+		return false;
+	}
 
-	// Configure the engine to use the specific hardware ID
 	ma_engine_config EngineConfig = ma_engine_config_init();
 	EngineConfig.pPlaybackDeviceID = &pPlaybackInfos[DeviceIndex].id;
 
 	if (ma_engine_init(&EngineConfig, &AudioEngine) == MA_SUCCESS)
 	{
 		bIsEngineInitialized = true;
+
+		// Inicializa o filtro Low-Pass (abafador) no grafo da engine
+		ma_uint32 Channels = ma_engine_get_channels(&AudioEngine);
+		ma_uint32 SampleRate = ma_engine_get_sample_rate(&AudioEngine);
+		double InitialCutoff = bIsCurrentlyMuffled ? (double)MuffledCutoffFrequency : 20000.0;
+
+		// Ordem 4 deixa o corte bem acentuado (parecido com mão tapando a boca)
+		ma_lpf_node_config LpfConfig = ma_lpf_node_config_init(Channels, SampleRate, InitialCutoff, 4);
+
+		if (ma_lpf_node_init(ma_engine_get_node_graph(&AudioEngine), &LpfConfig, NULL, &MuffleFilterNode) == MA_SUCCESS)
+		{
+			bIsFilterInitialized = true;
+			// Conecta a saída do filtro na saída principal do dispositivo Bluetooth
+			ma_node_attach_output_bus(&MuffleFilterNode, 0, ma_engine_get_endpoint(&AudioEngine), 0);
+			ma_node_set_output_bus_volume(&MuffleFilterNode, 0, bIsCurrentlyMuffled ? MuffledVolumeMultiplier : 1.0f);
+		}
 	}
 
 	ma_context_uninit(&Context);
@@ -75,29 +91,96 @@ bool UBluetoothAudioComponent::InitializeAudioEngine(int32 DeviceIndex)
 
 void UBluetoothAudioComponent::PlayAudioFile(FString FileName)
 {
-	if (bIsEngineInitialized)
-	{
-		FString RelativePath = FPaths::ProjectContentDir() + TEXT("BearAudio/") + FileName;
-		FString FullPath = FPaths::ConvertRelativePathToFull(RelativePath);
+	if (!bIsEngineInitialized) return;
 
-		if (GEngine)
+	// Se já existe um som carregado/tocando, para e libera antes de tocar o próximo
+	if (bIsSoundInitialized)
+	{
+		ma_sound_stop(&CurrentSound);
+		ma_sound_uninit(&CurrentSound);
+		bIsSoundInitialized = false;
+	}
+
+	FString RelativePath = FPaths::ProjectContentDir() + TEXT("BearAudio/") + FileName;
+	FString FullPath = FPaths::ConvertRelativePathToFull(RelativePath);
+
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Green, FString::Printf(TEXT("Tocando audio: %s"), *FullPath));
+	}
+
+	// Se o filtro existe, iniciamos sem conexão padrão para rotear pelo filtro primeiro
+	ma_uint32 Flags = bIsFilterInitialized ? MA_SOUND_FLAG_NO_DEFAULT_ATTACHMENT : 0;
+
+	if (ma_sound_init_from_file(&AudioEngine, TCHAR_TO_UTF8(*FullPath), Flags, NULL, NULL, &CurrentSound) == MA_SUCCESS)
+	{
+		bIsSoundInitialized = true;
+
+		if (bIsFilterInitialized)
 		{
-			GEngine->AddOnScreenDebugMessage(-1, 15.0f, FColor::Green, FString::Printf(TEXT("A procurar audio em: %s"), *FullPath));
+			ma_node_attach_output_bus(&CurrentSound, 0, &MuffleFilterNode, 0);
 		}
 
-		ma_engine_play_sound(&AudioEngine, TCHAR_TO_UTF8(*FullPath), NULL);
+		ma_sound_start(&CurrentSound);
 	}
 }
 
-void UBluetoothAudioComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+void UBluetoothAudioComponent::StopAudio()
 {
-	// Safely destroy the audio engine to prevent memory leaks and crashes
+	if (bIsSoundInitialized)
+	{
+		ma_sound_stop(&CurrentSound);
+		ma_sound_uninit(&CurrentSound);
+		bIsSoundInitialized = false;
+	}
+}
+
+void UBluetoothAudioComponent::SetVoiceMuffled(bool bMuffled)
+{
+	bIsCurrentlyMuffled = bMuffled;
+
+	if (!bIsEngineInitialized || !bIsFilterInitialized) return;
+
+	ma_uint32 Channels = ma_engine_get_channels(&AudioEngine);
+	ma_uint32 SampleRate = ma_engine_get_sample_rate(&AudioEngine);
+
+	// 20000 Hz deixa passar todas as frequências audíveis (voz normal)
+	// MuffledCutoffFrequency (~450 Hz) corta os agudos e deixa só o grave abafado
+	double TargetCutoff = bMuffled ? (double)MuffledCutoffFrequency : 20000.0;
+
+	ma_lpf_config NewConfig = ma_lpf_config_init(ma_format_f32, Channels, SampleRate, TargetCutoff, 4);
+	ma_lpf_node_reinit(&NewConfig, &MuffleFilterNode);
+
+	// Também reduz levemente o volume para dar mais realismo físico
+	ma_node_set_output_bus_volume(&MuffleFilterNode, 0, bMuffled ? MuffledVolumeMultiplier : 1.0f);
+}
+
+void UBluetoothAudioComponent::ShutdownAudioEngine()
+{
+	// A ordem de destruição importa: primeiro o som, depois o filtro, por último a engine
+	if (bIsSoundInitialized)
+	{
+		ma_sound_stop(&CurrentSound);
+		ma_sound_uninit(&CurrentSound);
+		bIsSoundInitialized = false;
+	}
+
+	if (bIsFilterInitialized)
+	{
+		ma_lpf_node_uninit(&MuffleFilterNode, NULL);
+		bIsFilterInitialized = false;
+	}
+
 	if (bIsEngineInitialized)
 	{
 		ma_engine_uninit(&AudioEngine);
 		bIsEngineInitialized = false;
 	}
+}
 
+void UBluetoothAudioComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	ShutdownAudioEngine();
 	Super::EndPlay(EndPlayReason);
 }
 

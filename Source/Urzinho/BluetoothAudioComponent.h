@@ -3,7 +3,6 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 
-// Third-party includes must be wrapped to avoid Unreal build tool errors
 THIRD_PARTY_INCLUDES_START
 #include "miniaudio.h"
 THIRD_PARTY_INCLUDES_END
@@ -16,8 +15,15 @@ class URZINHO_API UBluetoothAudioComponent : public UActorComponent
 	GENERATED_BODY()
 
 public:
-	// default values 
 	UBluetoothAudioComponent();
+
+	// Frequência de corte quando a boca está tapada (quanto menor, mais abafado. Ex: 350 a 600 Hz)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Bluetooth|Muffle")
+	float MuffledCutoffFrequency = 450.0f;
+
+	// Multiplicador de volume quando a boca está tapada (0.0 a 1.0)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Bluetooth|Muffle")
+	float MuffledVolumeMultiplier = 0.65f;
 
 	// Retrieves a list of all available audio playback devices
 	UFUNCTION(BlueprintCallable, Category = "Audio|Bluetooth")
@@ -31,21 +37,31 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Audio|Bluetooth")
 	void PlayAudioFile(FString FileName);
 
-protected:
-	// Called when the game starts
-	virtual void BeginPlay() override;
+	// Interrompe imediatamente o áudio que está tocando
+	UFUNCTION(BlueprintCallable, Category = "Audio|Bluetooth")
+	void StopAudio();
 
-	// Called when the game ends or the component is destroyed
+	// Ativa ou desativa o efeito de voz abafada em tempo real
+	UFUNCTION(BlueprintCallable, Category = "Audio|Bluetooth")
+	void SetVoiceMuffled(bool bMuffled);
+
+protected:
+	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:
-	// Called every frame
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
-	// Miniaudio engine instance
-	ma_engine AudioEngine;
+	// Helper interno para limpar a engine, filtro e som com segurança
+	void ShutdownAudioEngine();
 
-	// Flag to track if the engine is currently running
+	ma_engine AudioEngine;
+	ma_sound CurrentSound;
+	ma_lpf_node MuffleFilterNode;
+
 	bool bIsEngineInitialized = false;
+	bool bIsSoundInitialized = false;
+	bool bIsFilterInitialized = false;
+	bool bIsCurrentlyMuffled = false;
 };
