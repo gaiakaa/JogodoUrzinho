@@ -23,7 +23,7 @@ public:
 
 	// Multiplicador de volume quando a boca está tapada (0.0 a 1.0)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Bluetooth|Muffle")
-	float MuffledVolumeMultiplier = 0.65f;
+	float MuffledVolumeMultiplier = 0.8f;
 
 	// Retrieves a list of all available audio playback devices
 	UFUNCTION(BlueprintCallable, Category = "Audio|Bluetooth")
@@ -33,11 +33,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Audio|Bluetooth")
 	bool InitializeAudioEngine(int32 DeviceIndex);
 
-	// Plays an audio file directly to the initialized Bluetooth device
+	// Plays an audio file directly to the initialized Bluetooth device (com opção de Loop)
 	UFUNCTION(BlueprintCallable, Category = "Audio|Bluetooth")
-	void PlayAudioFile(FString FileName);
+	void PlayAudioFile(FString FileName, bool bLoop = false);
 
-	// Interrompe imediatamente o áudio que está tocando
+	// Pausa o áudio atual mantendo o ponto onde parou
+	UFUNCTION(BlueprintCallable, Category = "Audio|Bluetooth")
+	void PauseAudio();
+
+	// Retoma o áudio pausado
+	UFUNCTION(BlueprintCallable, Category = "Audio|Bluetooth")
+	void ResumeAudio();
+
+	// Interrompe imediatamente e descarrega o áudio que está tocando
 	UFUNCTION(BlueprintCallable, Category = "Audio|Bluetooth")
 	void StopAudio();
 

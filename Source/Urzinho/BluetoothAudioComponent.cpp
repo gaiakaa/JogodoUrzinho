@@ -89,7 +89,7 @@ bool UBluetoothAudioComponent::InitializeAudioEngine(int32 DeviceIndex)
 	return bIsEngineInitialized;
 }
 
-void UBluetoothAudioComponent::PlayAudioFile(FString FileName)
+void UBluetoothAudioComponent::PlayAudioFile(FString FileName, bool bLoop)
 {
 	if (!bIsEngineInitialized) return;
 
@@ -106,7 +106,7 @@ void UBluetoothAudioComponent::PlayAudioFile(FString FileName)
 
 	if (GEngine)
 	{
-		GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Green, FString::Printf(TEXT("Tocando audio: %s"), *FullPath));
+		GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Green, FString::Printf(TEXT("Tocando audio: %s (Loop: %s)"), *FullPath, bLoop ? TEXT("Sim") : TEXT("Nao")));
 	}
 
 	// Se o filtro existe, iniciamos sem conexão padrão para rotear pelo filtro primeiro
@@ -121,6 +121,25 @@ void UBluetoothAudioComponent::PlayAudioFile(FString FileName)
 			ma_node_attach_output_bus(&CurrentSound, 0, &MuffleFilterNode, 0);
 		}
 
+		// Define se o som vai repetir em loop até ser pausado/parado
+		ma_sound_set_looping(&CurrentSound, bLoop ? MA_TRUE : MA_FALSE);
+
+		ma_sound_start(&CurrentSound);
+	}
+}
+
+void UBluetoothAudioComponent::PauseAudio()
+{
+	if (bIsSoundInitialized)
+	{
+		ma_sound_stop(&CurrentSound);
+	}
+}
+
+void UBluetoothAudioComponent::ResumeAudio()
+{
+	if (bIsSoundInitialized)
+	{
 		ma_sound_start(&CurrentSound);
 	}
 }
